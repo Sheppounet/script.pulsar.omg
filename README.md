@@ -1,4 +1,4 @@
-script.pulsar.cpb
+script.pulsar.omg
 =================
 
 OMGTorrent (French) Pulsar provider for XBMC
