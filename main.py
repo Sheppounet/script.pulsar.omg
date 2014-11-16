@@ -1,86 +1,50 @@
-import sys
-import json
-import base64
-import hashlib
+# -*- coding: latin-1 -*-
 import re
-import urllib
-import urllib2
-import xbmc
-import xbmcaddon
-import bencode
 from threading import Thread
 import Queue
 import CommonFunctions
-
-PAYLOAD = json.loads(base64.b64decode(sys.argv[1]))
+from pulsar import provider
 
 # Addon Script information
-__addonID__ = str(sys.argv[0])
-__addon__ = xbmcaddon.Addon(__addonID__)
-__baseUrl__ = __addon__.getSetting("base_url")
+__baseUrl__ = provider.ADDON.getSetting("base_url")
 
 # ParseDOM init
 common = CommonFunctions
-common.plugin = __addonID__
+common.plugin = str(sys.argv[0])
 
+tmdbUrl = 'http://api.themoviedb.org/3'
+tmdbKey = '8d0e4dca86c779f4157fc2c469c372ca'    # mancuniancol's API Key.
 ACTION_SEARCH = "recherche.php"
 ACTION_FILMS = "films"
 ACTION_SERIES = "series"
 CATEGORY_FILMS = "<strong>Films</strong>"
 CATEGORY_SERIES = "<strong>Series</strong>"
-USERAGENT = "Mozilla/5.0 (X11; U; Linux i686) Gecko/20071127 Firefox/2.0.0.11"
-
-class HeadRequest(urllib2.Request):
-    def get_method(self):
-        return "HEAD"
 
 # Direct link - Use with Threading queue
 def directLink(url, q):
-    xbmc.log('directLink URL : %s' % url, xbmc.LOGDEBUG)
-    url = urllib2.Request(url)
-    url.add_header('User-Agent', USERAGENT)
-    response = urllib2.urlopen(url)
-    data = response.read()
-    if response.headers.get("Content-Encoding", "") == "gzip":
-        import zlib
-        data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
-    q.put([{"uri": magnet} for magnet in re.findall(r'magnet:\?[^\'"\s<>\[\]]+', data)])
-
-# Search and return JSON results
-def jsonSearch(query):
-    url = "%s/%s?ajax&query=%s" % (__baseUrl__, ACTION_SEARCH, urllib.quote_plus(query))
-    xbmc.log('jsonSearch : %s' % url, xbmc.LOGDEBUG)
-    url = urllib2.Request(url)
-    url.add_header('User-Agent', USERAGENT)
-    response = urllib2.urlopen(url)
-    data = response.read()
-    if response.headers.get("Content-Encoding", "") == "gzip":
-        import zlib
-        data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
-    return data
+    provider.log.debug('directLink URL : %s' % url)
+    response = provider.GET(url)
+    q.put([{"uri": magnet} for magnet in re.findall(r'magnet:\?[^\'"\s<>\[\]]+', response.data)])
 
 # Default Search
 def search(query):
-    url = "%s/%s?query=%s" % (__baseUrl__, ACTION_SEARCH, urllib.quote_plus(query))
-    xbmc.log('Search : %s' % url, xbmc.LOGDEBUG)
-    req = urllib2.Request(url)
-    req.add_header('User-Agent', USERAGENT)
-    response = urllib2.urlopen(req)
-    data = response.read()
-    if response.headers.get("Content-Encoding", "") == "gzip":
-        import zlib
-        data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
+    provider.log.info("QUERY : %s" % query)
+    if(query['query']) : 
+        query = query['query']
+    url = "%s/%s?query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(query))
+    provider.log.debug('Search : %s' % url)
+    response = provider.GET(url)
     if response.geturl() is not url:
         # Redirection 30x followed to individual page - Return the magnet link
-        xbmc.log('Redirection 30x followed to individual page - Return the magnet link', xbmc.LOGDEBUG)
-        return [{"uri": magnet} for magnet in re.findall(r'magnet:\?[^\'"\s<>\[\]]+', data)]
+        provider.log.debug('Redirection 30x followed to individual page - Return the magnet link')
+        return [{"uri": magnet} for magnet in re.findall(r'magnet:\?[^\'"\s<>\[\]]+', response.data)]
     else:
         # Multiple torrent page - Parse page to get individual page
-        xbmc.log('Multiple torrent page - Parsing', xbmc.LOGDEBUG)
+        provider.log.debug('Multiple torrent page - Parsing')
         # Parse the table result
-        table = common.parseDOM(data, 'table', attrs = { "class": "table_corps" })
+        table = common.parseDOM(response.data, 'table', attrs = { "class": "table_corps" })
         liens = common.parseDOM(table, 'a', attrs = { "class": "torrent" }, ret = 'href')
-        xbmc.log('liens : %s' % liens, xbmc.LOGDEBUG)
+        provider.log.debug('liens : %s' % liens)
         threads = []
         magnets = []
         q = Queue.Queue()
@@ -97,77 +61,74 @@ def search(query):
         while not q.empty():
             magnets.append(q.get()[0])
 
-        xbmc.log('Magnets List : %s' % magnets)
+        provider.log.info('Magnets List : %s' % magnets)
         return magnets
 
-def search_episode(imdb_id, tvdb_id, name, season, episode): 
-    results = json.loads(jsonSearch(name))
-    for result in results:
+def search_episode(episode): 
+    provider.log.debug("Search episode : name %(title)s, season %(season)02d, episode %(episode)02d" % episode)
+    # Pulsar 0.2 doesn't work well with foreing title.  Get the FRENCH title
+    # from TMDB
+    provider.log.debug('Get FRENCH title from TMDB for %s' % episode['imdb_id'])
+    response = provider.GET("%s/find/%s?api_key=%s&language=fr&external_source=imdb_id" % (tmdbUrl, episode['imdb_id'], tmdbKey))
+    provider.log.info("URL : %s/find/%s?api_key=%s&language=fr&external_source=imdb_id" % (tmdbUrl, episode['imdb_id'], tmdbKey))
+    provider.log.info(response)
+    if response != (None, None):
+        episode['title'] = response.json()['tv_results'][0]['name']
+        provider.log.debug('FRENCH title :  %s' % episode['title'].encode('ascii', 'ignore'))
+    else :
+        provider.log.error('Error when calling TMDB. Use Pulsar movie data.')
+    resp = provider.GET("%s/%s?ajax&query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(episode['title'])))
+    for result in resp.json():
         if result["category"] == CATEGORY_SERIES :
             # Get show's individual url
-            url = "%s/%s?query=%s" % (__baseUrl__, ACTION_SEARCH, urllib.quote_plus(result["label"]))
-            if season is not 1 :
+            url = "%s/%s?query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(result["label"]))
+            if episode['season'] is not 1 :
                 # Get model url for requested season
-                xbmc.log('Season URL: %s' % url, xbmc.LOGDEBUG)
-                req = urllib2.Request(url)
-                req.add_header('User-Agent', USERAGENT)
-                response = urllib2.urlopen(req)
+                provider.log.debug('Season URL: %s' % url)
+                response = provider.HEAD(url)
                 # Replace "season" data in url.  Ex.  :
                 # http://www.omgtorrent.com/series/true-blood_saison_7_53.html
-                url = response.geturl().replace("_1_","_%s_" % season)
+                url = response.geturl().replace("_1_","_%s_" % episode['season'])
             # Parse season specific page
-            return parse_season(url,episode)
+            return parse_season(url,episode['episode'])
 
-def search_movie(imdb_id, name, year):
-    results = json.loads(jsonSearch(name))
-    xbmc.log('Search Movie JSon results: %s' % results, xbmc.LOGDEBUG)
-    for result in results:
+#def search_movie(imdb_id, name, year):
+def search_movie(movie):
+    # Pulsar 0.2 doesn't work well with foreing title.  Get the FRENCH title from TMDB
+    provider.log.debug('Get FRENCH title from TMDB for %s' % movie['imdb_id'])
+    response = provider.GET("%s/movie/%s?api_key=%s&language=fr&external_source=imdb_id&append_to_response=alternative_titles" % (tmdbUrl, movie['imdb_id'], tmdbKey))
+    if response != (None, None):
+        movie = response.json()
+        provider.log.info('FRENCH title :  %s' % provider.quote_plus(movie['title'].encode('ascii', 'ignore')))
+    else :
+        provider.log.error('Error when calling TMDB. Use Pulsar movie data.')
+    resp = provider.GET("%s/%s?ajax&query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(movie['title'])))
+    for result in resp.json():
         if result["category"] == CATEGORY_FILMS:
             # Get movie's page
-            return search(result["label"])
-
-def torrent2magnet(torrent_url, q):
-    req = urllib2.Request(torrent_url)
-    req.add_header('User-Agent', USERAGENT)
-    response = urllib2.urlopen(req)
-    torrent = response.read()
-    metadata = bencode.bdecode(torrent)
-    hashcontents = bencode.bencode(metadata['info'])
-    digest = hashlib.sha1(hashcontents).digest()
-    b32hash = base64.b32encode(digest)
-    magneturl = 'magnet:?xt=urn:btih:' + b32hash + '&dn=' + metadata['info']['name']
-    xbmc.log('Put Magnet in queue : %s' % magneturl, xbmc.LOGDEBUG)
-    q.put(magneturl)
+            return search({'query':result["label"]})
+    # If no result
+    return []
 
 def parse_season(url, episode):
     result = []
-    threads = []
-    q = Queue.Queue()
-    url = urllib2.Request(url)
-    url.add_header('User-Agent', USERAGENT)
-    response = urllib2.urlopen(url)
-    data = response.read()
-    if response.headers.get("Content-Encoding", "") == "gzip":
-        import zlib
-        data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
+    response = provider.GET(url)
     # Get torrent (if any) from table - 1 line per episode
-    table = common.parseDOM(data, 'table', attrs = { "class": "table_corps" })
+    table = common.parseDOM(response.data, 'table', attrs = { "class": "table_corps" })
     liens = common.parseDOM(table, 'tr', attrs = { "class": "bords" })
+    provider.log.info(liens)
     if liens :
         # Get the first known episode
         start = int(common.parseDOM(liens[0], 'td')[0].rstrip('.'))
-        for torrent in common.parseDOM(liens[episode - start], 'a', ret = 'href') :
-            # Call each individual page in parallel
-            thread = Thread(target=torrent2magnet, args = ('%s%s' % (__baseUrl__, torrent), q))
-            thread.start()
-            threads.append(thread)
-        
-        # And get all the results
-        for t in threads :
-            t.join()
-        while not q.empty():
-            result.append({"uri": q.get()})
+        try:
+            return [{"uri": '%s%s' % (__baseUrl__, torrent) for torrent in common.parseDOM(liens[episode - start], 'a', ret = 'href')}]
+        except IndexError:
+            # Pulsar show episode that aren't published yet, so not present in
+            # OMG results.
+            # If this future episode is selected, return Notification instead
+            # of IndexError
+            provider.notify("Episode actuellement indisponible.")
     return result
 
-urllib2.urlopen(PAYLOAD["callback_url"],
-    data=json.dumps(globals()[PAYLOAD["method"]](*PAYLOAD["args"])))
+# Registers the module in Pulsar
+provider.register(search, search_movie, search_episode)

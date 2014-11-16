@@ -25,12 +25,12 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="bencode.py" />
     <Compile Include="main.py" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="addon.xml" />
     <Content Include="changelog.txt" />
+    <Content Include="README.md" />
     <Content Include="resources\settings.xml" />
   </ItemGroup>
   <ItemGroup>
