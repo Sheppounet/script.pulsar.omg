@@ -1,4 +1,4 @@
-# -*- coding: latin-1 -*-
+import unicodedata
 import re
 from threading import Thread
 import Queue
@@ -28,19 +28,22 @@ def directLink(url, q):
 
 # Default Search
 def search(query):
-    provider.log.info("QUERY : %s" % query)
+    provider.log.debug("QUERY : %s" % query)
     if(query['query']) : 
         query = query['query']
+    query_normalize = unicodedata.normalize('NFKD',query)
+    query = ''.join(c for c in query_normalize if (not unicodedata.combining(c)))
     url = "%s/%s?query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(query))
-    provider.log.debug('Search : %s' % url)
+    provider.log.info("SEARCH : %s" % url)
     response = provider.GET(url)
     if response.geturl() is not url:
         # Redirection 30x followed to individual page - Return the magnet link
-        provider.log.debug('Redirection 30x followed to individual page - Return the magnet link')
-        return [{"uri": magnet} for magnet in re.findall(r'magnet:\?[^\'"\s<>\[\]]+', response.data)]
+        provider.log.info('Redirection 30x followed to individual page - Return the magnet link')
+        return provider.extract_magnets(response.data)
+        #return [{"uri": magnet} for magnet in re.findall(r'magnet:\?[^\'"\s<>\[\]]+', response.data)]
     else:
         # Multiple torrent page - Parse page to get individual page
-        provider.log.debug('Multiple torrent page - Parsing')
+        provider.log.info('Multiple torrent page - Parsing')
         # Parse the table result
         table = common.parseDOM(response.data, 'table', attrs = { "class": "table_corps" })
         liens = common.parseDOM(table, 'a', attrs = { "class": "torrent" }, ret = 'href')
@@ -66,15 +69,14 @@ def search(query):
 
 def search_episode(episode): 
     provider.log.debug("Search episode : name %(title)s, season %(season)02d, episode %(episode)02d" % episode)
-    # Pulsar 0.2 doesn't work well with foreing title.  Get the FRENCH title
-    # from TMDB
+    # Pulsar 0.2 doesn't work well with foreing title.  Get the FRENCH title from TMDB
     provider.log.debug('Get FRENCH title from TMDB for %s' % episode['imdb_id'])
     response = provider.GET("%s/find/%s?api_key=%s&language=fr&external_source=imdb_id" % (tmdbUrl, episode['imdb_id'], tmdbKey))
-    provider.log.info("URL : %s/find/%s?api_key=%s&language=fr&external_source=imdb_id" % (tmdbUrl, episode['imdb_id'], tmdbKey))
-    provider.log.info(response)
+    provider.log.debug(response)
     if response != (None, None):
-        episode['title'] = response.json()['tv_results'][0]['name']
-        provider.log.debug('FRENCH title :  %s' % episode['title'].encode('ascii', 'ignore'))
+        name_normalize = unicodedata.normalize('NFKD',response.json()['tv_results'][0]['name'])
+        episode['title'] = ''.join(c for c in name_normalize if (not unicodedata.combining(c)))
+        provider.log.info('FRENCH title :  %s' % episode['title'])
     else :
         provider.log.error('Error when calling TMDB. Use Pulsar movie data.')
     resp = provider.GET("%s/%s?ajax&query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(episode['title'])))
@@ -92,14 +94,14 @@ def search_episode(episode):
             # Parse season specific page
             return parse_season(url,episode['episode'])
 
-#def search_movie(imdb_id, name, year):
 def search_movie(movie):
     # Pulsar 0.2 doesn't work well with foreing title.  Get the FRENCH title from TMDB
     provider.log.debug('Get FRENCH title from TMDB for %s' % movie['imdb_id'])
     response = provider.GET("%s/movie/%s?api_key=%s&language=fr&external_source=imdb_id&append_to_response=alternative_titles" % (tmdbUrl, movie['imdb_id'], tmdbKey))
     if response != (None, None):
-        movie = response.json()
-        provider.log.info('FRENCH title :  %s' % provider.quote_plus(movie['title'].encode('ascii', 'ignore')))
+        title_normalize = unicodedata.normalize('NFKD',response.json()['title'])
+        movie['title'] = ''.join(c for c in title_normalize if (not unicodedata.combining(c)))
+        provider.log.info('FRENCH title :  %s' % movie['title'])
     else :
         provider.log.error('Error when calling TMDB. Use Pulsar movie data.')
     resp = provider.GET("%s/%s?ajax&query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(movie['title'])))
@@ -123,10 +125,8 @@ def parse_season(url, episode):
         try:
             return [{"uri": '%s%s' % (__baseUrl__, torrent) for torrent in common.parseDOM(liens[episode - start], 'a', ret = 'href')}]
         except IndexError:
-            # Pulsar show episode that aren't published yet, so not present in
-            # OMG results.
-            # If this future episode is selected, return Notification instead
-            # of IndexError
+            # Pulsar show episode that aren't published yet, so not present in OMG results.
+            # If this future episode is selected, return Notification instead of IndexError
             provider.notify("Episode actuellement indisponible.")
     return result
 
