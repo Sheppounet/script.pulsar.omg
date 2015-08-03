@@ -29,8 +29,6 @@ def directLink(url, q):
 # Default Search
 def search(query):
     provider.log.debug("QUERY : %s" % query)
-    if(query['query']) : 
-        query = query['query']
     query_normalize = unicodedata.normalize('NFKD',query)
     query = ''.join(c for c in query_normalize if (not unicodedata.combining(c)))
     url = "%s/%s?query=%s" % (__baseUrl__, ACTION_SEARCH, provider.quote_plus(query))
@@ -108,7 +106,7 @@ def search_movie(movie):
     for result in resp.json():
         if result["category"] == CATEGORY_FILMS:
             # Get movie's page
-            return search({'query':result["label"]})
+            return search(result["label"])
     # If no result
     return []
 
